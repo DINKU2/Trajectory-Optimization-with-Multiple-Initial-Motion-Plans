@@ -1,0 +1,4 @@
+numpy
+scipy
+tesseract-robotics
+trajopt

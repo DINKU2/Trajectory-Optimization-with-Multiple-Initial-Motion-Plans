@@ -1,1 +1,1 @@
-# Trajectory-Optimization-with-Multiple-Initial-Motion-Plans
+Install requirements in an env
