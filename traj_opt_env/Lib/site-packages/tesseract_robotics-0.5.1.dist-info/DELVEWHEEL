@@ -1,0 +1,2 @@
+Version: 1.10.0
+Arguments: ['C:\\hostedtoolcache\\windows\\Python\\3.12.0\\x64\\Lib\\site-packages\\delvewheel\\__main__.py', 'repair', '--no-dll', 'msvcp140.dll;vcomp140.dll', 'D:/a/tesseract_python-1/tesseract_python-1/ws/build/tesseract_python/python/dist/tesseract_robotics-0.5.1-cp312-cp312-win_amd64.whl']

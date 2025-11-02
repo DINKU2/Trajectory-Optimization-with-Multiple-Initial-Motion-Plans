@@ -1,0 +1,22 @@
+Metadata-Version: 2.2
+Name: tesseract-robotics-viewer
+Version: 0.5.0
+Summary: Tesseract Viewer Python Library
+Home-page: https://github.com/tesseract-robotics/tesseract_python
+Author: John Wason
+Author-email: wason@wasontech.com
+License: Apache-2.0
+Requires-Dist: numpy
+Requires-Dist: tesseract_robotics>=0.2.0
+Requires-Dist: opencv-contrib-python
+Requires-Dist: aiohttp
+Requires-Dist: importlib-resources
+Dynamic: author
+Dynamic: author-email
+Dynamic: description
+Dynamic: home-page
+Dynamic: license
+Dynamic: requires-dist
+Dynamic: summary
+
+Tesseract Robotics viewer package for Python
