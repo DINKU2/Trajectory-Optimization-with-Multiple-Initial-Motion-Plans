@@ -72,10 +72,8 @@
   <!--JOINTS: When a joint is specified, the child link of that joint (which will always exist) is automatically included-->
   <!--CHAINS: When a chain is specified, all the links along the chain (including endpoints) are included in the group. Additionally, all the joints that are parents to included links are also included. This means that joints along the chain and the parent joint of the base link are included in the group-->
   <!--SUBGROUPS: Groups can also be formed by referencing to already defined group names-->
+  <!-- Use only joints - child links are automatically included by Tesseract -->
   <group name="hand">
-    <link name="panda_hand"/>
-    <link name="panda_leftfinger"/>
-    <link name="panda_rightfinger"/>
     <joint name="panda_finger_joint1"/>
     <passive_joint name="panda_finger_joint2"/>
   </group>
@@ -90,10 +88,8 @@
   <!--JOINTS: When a joint is specified, the child link of that joint (which will always exist) is automatically included-->
   <!--CHAINS: When a chain is specified, all the links along the chain (including endpoints) are included in the group. Additionally, all the joints that are parents to included links are also included. This means that joints along the chain and the parent joint of the base link are included in the group-->
   <!--SUBGROUPS: Groups can also be formed by referencing to already defined group names-->
-  <group name="panda_arm_hand">
-    <group name="panda_arm"/>
-    <group name="hand"/>
-  </group>
+  <!-- Note: Tesseract doesn't support subgroups (<group name="..."/>), so panda_arm_hand is removed -->
+  <!-- Use panda_arm and hand groups separately if needed -->
   <group_state group="hand" name="open">
     <joint name="panda_finger_joint1" value="0.035"/>
     <joint name="panda_finger_joint2" value="0.035"/>
