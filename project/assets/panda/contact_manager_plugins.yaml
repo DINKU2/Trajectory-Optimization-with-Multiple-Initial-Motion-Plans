@@ -1,0 +1,14 @@
+contact_manager_plugins:
+  search_libraries:
+    - tesseract_collision_bullet_factories
+  discrete_plugins:
+    default: BulletDiscreteBVHManager
+    plugins:
+      BulletDiscreteBVHManager:
+        class: BulletDiscreteBVHManagerFactory
+  continuous_plugins:
+    default: BulletCastBVHManager
+    plugins:
+      BulletCastBVHManager:
+        class: BulletCastBVHManagerFactory
+
