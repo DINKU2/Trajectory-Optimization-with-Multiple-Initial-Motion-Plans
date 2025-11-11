@@ -32,7 +32,7 @@ from tesseract_robotics_viewer import TesseractViewer
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
-USE_OBSTACLES = True  # Set to False to disable obstacles (test in empty environment)
+USE_OBSTACLES = True  
 
 # Suppress SWIG memory leak warnings (known limitation - memory is properly managed by C++ environment)
 # SWIG prints these warnings directly to stderr, so we'll filter them
@@ -165,9 +165,8 @@ np.random.seed(42)  # For reproducibility
 # Start from a safe configuration (using the "ready" state from SRDF as reference)
 # This is a reasonable starting pose for the Panda arm
 start_config = np.array([0.0, -0.785, 0.0, -2.356, 0.0, 1.571, 0.785], dtype=np.float64)
+goal_config = np.array([2.35, 1., 0., -0.8, 0, 2.5, 0.785], dtype=np.float64)
 
-# Generate a random goal configuration within joint limits
-goal_config = np.random.uniform(joint_min, joint_max, size=7).astype(np.float64)
 
 # Create a simple linear interpolation between start and goal
 # This gives a more reasonable initial trajectory than completely random waypoints
