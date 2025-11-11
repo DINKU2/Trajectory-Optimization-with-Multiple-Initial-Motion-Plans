@@ -7,31 +7,23 @@ from pathlib import Path
 
 from tesseract_robotics.tesseract_common import (
     FilesystemPath, GeneralResourceLocator, ResourceLocator, SimpleLocatedResource,
-    Isometry3d, Translation3d, ManipulatorInfo, CollisionMarginData
-)
+    Isometry3d, Translation3d, ManipulatorInfo, CollisionMarginData)
 from tesseract_robotics.tesseract_environment import Environment, AddLinkCommand, AddContactManagersPluginInfoCommand
 from tesseract_robotics.tesseract_srdf import parseContactManagersPluginConfigString
 from tesseract_robotics.tesseract_scene_graph import Joint, Link, Visual, Collision, JointType_FIXED
 from tesseract_robotics.tesseract_geometry import Sphere
 from tesseract_robotics.tesseract_command_language import (
-    JointWaypoint, MoveInstructionType_FREESPACE, MoveInstruction, CompositeInstruction,
+    =JointWaypoint, MoveInstructionType_FREESPACE, MoveInstruction, CompositeInstruction,
     ProfileDictionary, JointWaypointPoly_wrap_JointWaypoint, MoveInstructionPoly_wrap_MoveInstruction,
-    InstructionPoly_as_MoveInstructionPoly, WaypointPoly_as_StateWaypointPoly
-)
+    InstructionPoly_as_MoveInstructionPoly, WaypointPoly_as_StateWaypointPoly)
 from tesseract_robotics.tesseract_motion_planners import PlannerRequest
-from tesseract_robotics.tesseract_motion_planners_trajopt import (
-    TrajOptDefaultPlanProfile, TrajOptDefaultCompositeProfile, TrajOptMotionPlanner
-)
+from tesseract_robotics.tesseract_motion_planners_trajopt import (TrajOptDefaultPlanProfile, TrajOptDefaultCompositeProfile, TrajOptMotionPlanner)
 from tesseract_robotics.tesseract_motion_planners_simple import generateInterpolatedProgram
 from tesseract_robotics.tesseract_time_parameterization import TimeOptimalTrajectoryGeneration, InstructionsTrajectory
-from tesseract_robotics.tesseract_collision import (
-    ContactResultMap, ContactTestType_ALL, ContactRequest, ContactResultVector
-)
+from tesseract_robotics.tesseract_collision import (ContactResultMap, ContactTestType_ALL, ContactRequest, ContactResultVector)
 from tesseract_robotics_viewer import TesseractViewer
 
-# ============================================================================
-# CONFIGURATION
-# ============================================================================
+
 USE_OBSTACLES = True  
 
 # Suppress SWIG memory leak warnings (known limitation - memory is properly managed by C++ environment)
