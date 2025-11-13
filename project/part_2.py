@@ -23,7 +23,6 @@ from tesseract_robotics.tesseract_time_parameterization import TimeOptimalTrajec
 from tesseract_robotics.tesseract_collision import (ContactResultMap, ContactTestType_ALL, ContactRequest, ContactResultVector)
 from tesseract_robotics_viewer import TesseractViewer
 
-# Import VAMP integration functions
 from vamp_trajopt_integration import (
     generate_vamp_paths, 
     vamp_path_to_tesseract_program, 
@@ -136,8 +135,7 @@ if USE_OBSTACLES:
         env.applyCommand(AddLinkCommand(obstacle_link, obstacle_joint))
     
     print(f"Added {len(obstacle_positions)} obstacles to the environment")
-else:
-    print("Obstacles disabled - running in empty environment")
+
 
 # Get state solver (needed for trajectory extraction)
 state_solver = env.getStateSolver()

@@ -12,7 +12,7 @@ from tesseract_robotics.tesseract_command_language import (
 from tesseract_robotics.tesseract_motion_planners_simple import generateInterpolatedProgram
 
 
-def generate_vamp_paths(start_config, goal_config, obstacle_centers, num_seeds=5, radius=0.2):
+def generate_vamp_RRTC_paths(start_config, goal_config, obstacle_centers, num_seeds=5, radius=0.2):
     """
     Generate multiple initial paths using VAMP's RRT-Connect planner with different random seeds.
     
@@ -27,8 +27,7 @@ def generate_vamp_paths(start_config, goal_config, obstacle_centers, num_seeds=5
         List of paths, where each path is a list of joint configurations (numpy arrays)
     """
     # Configure VAMP for Panda robot with RRT-Connect planner
-    (vamp_module, planner_func, plan_settings, simp_settings) = \
-        vamp.configure_robot_and_planner_with_kwargs("panda", "rrtc")
+    (vamp_module, planner_func, plan_settings, simp_settings) = vamp.configure_robot_and_planner_with_kwargs("panda", "rrtc")
     
     # Create VAMP environment with obstacles
     env = vamp.Environment()
@@ -61,17 +60,14 @@ def generate_vamp_paths(start_config, goal_config, obstacle_centers, num_seeds=5
         result = planner_func(start_list, goal_list, env, plan_settings, sampler)
         
         if result.solved:
-            # Simplify the path
-            simplified = vamp_module.simplify(result.path, env, simp_settings, sampler)
-            
             # Interpolate to make path denser (more waypoints)
             # This gives TrajOpt more points to work with
-            simplified.path.interpolate_to_resolution(vamp_module.resolution())
+            result.path.interpolate_to_resolution(vamp_module.resolution())
             
             # Convert VAMP path to list of numpy arrays
             path_waypoints = []
-            for i in range(len(simplified.path)):
-                config = simplified.path[i]
+            for i in range(len(result.path)):
+                config = result.path[i]
                 # VAMP path is a list of joint values
                 joint_values = [config[j] for j in range(7)]
                 path_waypoints.append(np.array(joint_values, dtype=np.float64))
@@ -178,38 +174,3 @@ def get_trajectory_duration(trajectory):
             max_time = max(max_time, state_wp.getTime())
     
     return max_time
-
-
-# Example usage (commented out - integrate into your main script)
-"""
-# Define start and goal (same as Part 1)
-start_config = np.array([0.0, -0.785, 0.0, -2.356, 0.0, 1.571, 0.785], dtype=np.float64)
-goal_config = np.array([2.35, 1., 0., -0.8, 0, 2.5, 0.785], dtype=np.float64)
-
-# Define obstacles (same as Part 1)
-obstacle_centers = [
-    [0.55, 0, 0.25],
-    [0.35, 0.35, 0.25],
-    [0, 0.55, 0.25],
-    [-0.55, 0, 0.25],
-    [-0.35, -0.35, 0.25],
-    [0, -0.55, 0.25],
-    [0.35, -0.35, 0.25],
-    [0.35, 0.35, 0.8],
-    [0, 0.55, 0.8],
-    [-0.35, 0.35, 0.8],
-    [-0.55, 0, 0.8],
-    [-0.35, -0.35, 0.8],
-    [0, -0.55, 0.8],
-    [0.35, -0.35, 0.8],
-]
-
-# Generate multiple VAMP paths
-vamp_paths, successful_seeds = generate_vamp_paths(
-    start_config, goal_config, obstacle_centers, num_seeds=5
-)
-
-# Now use each path as initial trajectory for TrajOpt
-# (See PART2_GUIDE.md for complete integration example)
-"""
-
