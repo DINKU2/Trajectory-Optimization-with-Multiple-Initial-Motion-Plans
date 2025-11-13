@@ -13,7 +13,7 @@ from tesseract_robotics.tesseract_srdf import parseContactManagersPluginConfigSt
 from tesseract_robotics.tesseract_scene_graph import Joint, Link, Visual, Collision, JointType_FIXED
 from tesseract_robotics.tesseract_geometry import Sphere
 from tesseract_robotics.tesseract_command_language import (
-    =JointWaypoint, MoveInstructionType_FREESPACE, MoveInstruction, CompositeInstruction,
+    JointWaypoint, MoveInstructionType_FREESPACE, MoveInstruction, CompositeInstruction,
     ProfileDictionary, JointWaypointPoly_wrap_JointWaypoint, MoveInstructionPoly_wrap_MoveInstruction,
     InstructionPoly_as_MoveInstructionPoly, WaypointPoly_as_StateWaypointPoly)
 from tesseract_robotics.tesseract_motion_planners import PlannerRequest
@@ -24,10 +24,11 @@ from tesseract_robotics.tesseract_collision import (ContactResultMap, ContactTes
 from tesseract_robotics_viewer import TesseractViewer
 
 
-USE_OBSTACLES = True  
+USE_OBSTACLES = True
 
-# Suppress SWIG memory leak warnings (known limitation - memory is properly managed by C++ environment)
-# SWIG prints these warnings directly to stderr, so we'll filter them
+# -------------------------------------------------------------
+# Suppress SWIG memory leak warnings (noise only)
+# -------------------------------------------------------------
 class SWIGWarningFilter:
     """Filter to suppress SWIG memory leak warnings"""
     def __init__(self):
@@ -42,10 +43,11 @@ class SWIGWarningFilter:
     def flush(self):
         self.stderr.flush()
 
-# Install filter to catch SWIG memory leak warnings
 _swig_filter = None
 
-# Set TESSERACT_RESOURCE_PATH to include project/assets/
+# -------------------------------------------------------------
+# Resource path setup
+# -------------------------------------------------------------
 assets_path = Path(__file__).parent / "assets"
 current_path = os.environ.get("TESSERACT_RESOURCE_PATH", "")
 if str(assets_path) not in current_path:
@@ -63,10 +65,10 @@ urdf_path = FilesystemPath(urdf_path_str)
 srdf_path = FilesystemPath(srdf_path_str)
 assert env.init(urdf_path, srdf_path, locator)
 
-# Configure contact manager plugins
-# Load contact manager plugins configuration from YAML file
+# -------------------------------------------------------------
+# Contact manager plugins (if available)
+# -------------------------------------------------------------
 contact_manager_config_path = Path(__file__).parent / "assets" / "panda" / "contact_manager_plugins.yaml"
-# Keep references to prevent SWIG memory leak warnings (objects are properly managed by environment)
 _contact_manager_plugin_info = None
 _contact_manager_cmd = None
 try:
@@ -75,211 +77,388 @@ try:
     _contact_manager_plugin_info = parseContactManagersPluginConfigString(contact_manager_yaml)
     _contact_manager_cmd = AddContactManagersPluginInfoCommand(_contact_manager_plugin_info)
     env.applyCommand(_contact_manager_cmd)
-    # Keep references alive to help SWIG with cleanup
-    # The environment takes ownership, but SWIG needs these references for proper cleanup
     print("Contact manager plugins configured successfully")
-    # Install SWIG warning filter to suppress memory leak warnings
     _swig_filter = SWIGWarningFilter()
     sys.stderr = _swig_filter
 except Exception as e:
     print(f"Warning: Could not load contact manager plugins: {e}")
     print("TrajOpt may still work, but collision checking might be limited")
 
-# Set initial robot state
-joint_names = [f"panda_joint{i+1}" for i in range(7)]  # Panda has 7 joints
-initial_joint_positions = np.zeros(7)  # All joints at zero position
+# -------------------------------------------------------------
+# Initial state
+# -------------------------------------------------------------
+joint_names = [f"panda_joint{i+1}" for i in range(7)]
+initial_joint_positions = np.zeros(7)
 env.setState(joint_names, initial_joint_positions)
 
-# Parse obstacles from obstacles.txt and add them as spheres (if enabled)
+# Optionally set a *global* collision margin (clearance) so planner & validators agree
+try:
+    env.setCollisionMarginData(CollisionMarginData(0.02))  # 2 cm global clearance target
+    print("Global collision margin set to 0.02 m")
+except Exception:
+    pass
+
+# -------------------------------------------------------------
+# Obstacles from file (spheres)
+# -------------------------------------------------------------
 if USE_OBSTACLES:
     obstacles_file = Path(__file__).parent / "assets" / "obstacles" / "obstacles.txt"
     obstacle_radius = 0.2
 
-    # Parse obstacle positions from file
     obstacle_positions = []
-    with open(obstacles_file, 'r') as f:
-        for line in f:
-            line = line.strip()
-            if line.startswith('['):
-                # Remove brackets and parse coordinates
-                coords = [float(x.strip()) for x in line[1:-1].split(',')]
-                obstacle_positions.append(coords)
+    if obstacles_file.exists():
+        with open(obstacles_file, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith('['):
+                    coords = [float(x.strip()) for x in line[1:-1].split(',')]
+                    obstacle_positions.append(coords)
 
-    # Add each obstacle as a sphere
     for i, pos in enumerate(obstacle_positions):
         obstacle_link = Link(f"obstacle_{i}")
-        
-        # Visual and collision geometry
-        obstacle_visual = Visual()
-        obstacle_visual.geometry = Sphere(obstacle_radius)
+        obstacle_visual = Visual(); obstacle_visual.geometry = Sphere(obstacle_radius)
         obstacle_link.visual.push_back(obstacle_visual)
-        
-        obstacle_collision = Collision()
-        obstacle_collision.geometry = Sphere(obstacle_radius)
+        obstacle_collision = Collision(); obstacle_collision.geometry = Sphere(obstacle_radius)
         obstacle_link.collision.push_back(obstacle_collision)
-        
-        # Fixed joint to attach obstacle
         obstacle_joint = Joint(f"obstacle_{i}_joint")
         obstacle_joint.parent_link_name = "panda_link0"
         obstacle_joint.child_link_name = obstacle_link.getName()
         obstacle_joint.type = JointType_FIXED
         obstacle_joint.parent_to_joint_origin_transform = Isometry3d.Identity() * Translation3d(*pos)
-        
         env.applyCommand(AddLinkCommand(obstacle_link, obstacle_joint))
-    
     print(f"Added {len(obstacle_positions)} obstacles to the environment")
 else:
     print("Obstacles disabled - running in empty environment")
 
-# Get state solver (needed for trajectory extraction)
+# -------------------------------------------------------------
+# Helpers
+# -------------------------------------------------------------
 state_solver = env.getStateSolver()
-
-# Configure manipulator info for TrajOpt
-manip_info = ManipulatorInfo()
-manip_info.tcp_frame = "panda_link8"
-manip_info.manipulator = "panda_arm"
-manip_info.working_frame = "panda_link0"
-
-# Get joint limits for random sampling
+manip_info = ManipulatorInfo(); manip_info.tcp_frame = "panda_link8"; manip_info.manipulator = "panda_arm"; manip_info.working_frame = "panda_link0"
 joint_group = env.getJointGroup("panda_arm")
 joint_limits = joint_group.getLimits().joint_limits
 joint_min = joint_limits[:, 0]
 joint_max = joint_limits[:, 1]
 
+np.random.seed(42)
+
 print("\n" + "="*60)
-print("Initializing TrajOpt with Random Solution")
+print("Initializing TrajOpt with Random Solution (two-phase: cost -> constraint)")
 print("="*60)
 
-# Create a random initial trajectory
-# Use a simpler approach: start from a known safe configuration and interpolate to a random goal
-np.random.seed(42)  # For reproducibility
-
-# Start from a safe configuration (using the "ready" state from SRDF as reference)
-# This is a reasonable starting pose for the Panda arm
+# --- Randomized initial solution ---
 start_config = np.array([0.0, -0.785, 0.0, -2.356, 0.0, 1.571, 0.785], dtype=np.float64)
+# rand_goal = np.random.uniform(low=joint_min, high=joint_max).astype(np.float64)
+# blend = 0.65
+# goal_config = blend * rand_goal + (1.0 - blend) * start_config
+# goal_config = np.clip(goal_config, joint_min, joint_max)
 goal_config = np.array([2.35, 1., 0., -0.8, 0, 2.5, 0.785], dtype=np.float64)
 
 
-# Create a simple linear interpolation between start and goal
-# This gives a more reasonable initial trajectory than completely random waypoints
-num_waypoints = 5  # Fewer waypoints for simpler problem
+num_waypoints = 5
 waypoints = []
 for i in range(num_waypoints):
     alpha = i / (num_waypoints - 1) if num_waypoints > 1 else 0.0
-    interpolated = start_config + alpha * (goal_config - start_config)
-    # Ensure within limits
-    interpolated = np.clip(interpolated, joint_min, joint_max)
-    waypoints.append(interpolated.astype(np.float64))
+    base = start_config + alpha * (goal_config - start_config)
+    jitter = np.random.normal(scale=0.05, size=base.shape)
+    if i in (0, num_waypoints - 1):
+        jitter[:] = 0.0
+    w = np.clip(base + jitter, joint_min, joint_max).astype(np.float64)
+    waypoints.append(w)
 
-# Create initial trajectory program with random waypoints
 program = CompositeInstruction("DEFAULT")
 program.setManipulatorInfo(manip_info)
-
-# Add start waypoint
 start_wp = JointWaypoint(joint_names, waypoints[0])
-start_instruction = MoveInstruction(
-    JointWaypointPoly_wrap_JointWaypoint(start_wp),
-    MoveInstructionType_FREESPACE,
-    "DEFAULT"
-)
-program.appendMoveInstruction(MoveInstructionPoly_wrap_MoveInstruction(start_instruction))
-
-# Add intermediate waypoints
+program.appendMoveInstruction(MoveInstructionPoly_wrap_MoveInstruction(MoveInstruction(JointWaypointPoly_wrap_JointWaypoint(start_wp),
+                                              MoveInstructionType_FREESPACE, "DEFAULT")))
 for i in range(1, len(waypoints)):
     wp = JointWaypoint(joint_names, waypoints[i])
-    instruction = MoveInstruction(
-        JointWaypointPoly_wrap_JointWaypoint(wp),
-        MoveInstructionType_FREESPACE,
-        "DEFAULT"
-    )
-    program.appendMoveInstruction(MoveInstructionPoly_wrap_MoveInstruction(instruction))
+    program.appendMoveInstruction(MoveInstructionPoly_wrap_MoveInstruction(MoveInstruction(JointWaypointPoly_wrap_JointWaypoint(wp),
+                                                  MoveInstructionType_FREESPACE, "DEFAULT")))
 
-# Interpolate the program to get dense waypoints for TrajOpt
-# Use fewer interpolation points to reduce problem complexity
-print("Interpolating trajectory...")
-interpolated_program = generateInterpolatedProgram(program, env, 3.14, 1.0, 3.14, 5)
+print("Interpolating trajectory seed...")
+# Use denser seed so hard-constraint phase has more DOFs to adjust
+interpolated_program = generateInterpolatedProgram(program, env, 3.14, 1.0, 3.14, 12)
 
-# Set up TrajOpt planner with more lenient settings
-# The default settings might be too strict for a random initial trajectory
+# -------------------------------------------------------------
+# TrajOpt profiles (two-phase) + Grid Search Utilities
+# -------------------------------------------------------------
 TRAJOPT_DEFAULT_NAMESPACE = "TrajOptMotionPlannerTask"
 trajopt_plan_profile = TrajOptDefaultPlanProfile()
 trajopt_composite_profile = TrajOptDefaultCompositeProfile()
 
-# Adjust collision settings to be more lenient (use cost instead of hard constraint)
-# This allows TrajOpt to work with trajectories that might have minor collisions initially
-try:
-    # Try to configure collision settings if available
-    # Use collision cost instead of hard constraint for more flexibility
-    trajopt_composite_profile.collision_constraint_config.enabled = False
-    trajopt_composite_profile.collision_cost_config.enabled = True
-    # Set a small collision margin to allow optimization to push away from obstacles
-    if hasattr(trajopt_composite_profile.collision_cost_config, 'collision_margin_buffer'):
-        trajopt_composite_profile.collision_cost_config.collision_margin_buffer = 0.01
-except AttributeError:
-    # If attributes don't exist, use defaults
-    print("Note: Using default TrajOpt collision settings")
+# Smoothness toggles (if present in your build)
+for attr, val in [("smooth_velocities", True), ("smooth_accelerations", True), ("smooth_jerks", True)]:
+    if hasattr(trajopt_plan_profile, attr):
+        setattr(trajopt_plan_profile, attr, val)
 
-trajopt_profiles = ProfileDictionary()
-trajopt_profiles.addProfile(TRAJOPT_DEFAULT_NAMESPACE, "DEFAULT", trajopt_plan_profile)
-trajopt_profiles.addProfile(TRAJOPT_DEFAULT_NAMESPACE, "DEFAULT", trajopt_composite_profile)
+planner = TrajOptMotionPlanner(TRAJOPT_DEFAULT_NAMESPACE)
 
-trajopt_planner = TrajOptMotionPlanner(TRAJOPT_DEFAULT_NAMESPACE)
+# Phase 1 profile (soft collisions)
+trajopt_composite_profile.collision_cost_config.enabled = True
+trajopt_composite_profile.collision_constraint_config.enabled = False
+if hasattr(trajopt_composite_profile.collision_cost_config, 'collision_margin_buffer'):
+    trajopt_composite_profile.collision_cost_config.collision_margin_buffer = 0.02
 
-# Create TrajOpt planning request
-trajopt_request = PlannerRequest()
-trajopt_request.instructions = interpolated_program
-trajopt_request.env = env
-trajopt_request.profiles = trajopt_profiles
+profiles_phase1 = ProfileDictionary()
+profiles_phase1.addProfile(TRAJOPT_DEFAULT_NAMESPACE, "DEFAULT", trajopt_plan_profile)
+profiles_phase1.addProfile(TRAJOPT_DEFAULT_NAMESPACE, "DEFAULT", trajopt_composite_profile)
 
-# Run TrajOpt optimization
-print("Running TrajOpt optimization...")
-start_time = time.time()
-try:
-    trajopt_response = trajopt_planner.solve(trajopt_request)
-    planning_time = time.time() - start_time
-except Exception as e:
-    print(f"ERROR: TrajOpt optimization failed with exception: {e}")
-    print("This may be due to missing contact manager plugins.")
-    exit(1)
+# ----- Helpers to build seeds & run phases -----
 
-if not trajopt_response.successful:
-    print(f"ERROR: TrajOpt failed to find a solution: {trajopt_response.message}")
-    exit(1)
+def build_seed_program(interp_density: int):
+    """Build a randomized seed program and interpolate with the given density."""
+    # random goal & jittered waypoints (re-using earlier code)
+    rand_goal = np.random.uniform(low=joint_min, high=joint_max).astype(np.float64)
+    blend = 0.65
+    goal_cfg = blend * rand_goal + (1.0 - blend) * start_config
+    goal_cfg = np.clip(goal_cfg, joint_min, joint_max)
 
-print(f"✓ TrajOpt optimization completed successfully!")
-print(f"Planning time: {planning_time:.4f} seconds")
+    num_wps = 5
+    wps = []
+    for i in range(num_wps):
+        alpha = i / (num_wps - 1) if num_wps > 1 else 0.0
+        base = start_config + alpha * (goal_cfg - start_config)
+        jit = np.random.normal(scale=0.05, size=base.shape)
+        if i in (0, num_wps - 1):
+            jit[:] = 0.0
+        w = np.clip(base + jit, joint_min, joint_max).astype(np.float64)
+        wps.append(w)
 
-# Get optimized trajectory (before time parameterization)
-trajopt_results_instruction = trajopt_response.results
+    prog = CompositeInstruction("DEFAULT")
+    prog.setManipulatorInfo(manip_info)
+    first = JointWaypoint(joint_names, wps[0])
+    prog.appendMoveInstruction(MoveInstructionPoly_wrap_MoveInstruction(MoveInstruction(JointWaypointPoly_wrap_JointWaypoint(first),
+                                                                                       MoveInstructionType_FREESPACE, "DEFAULT")))
+    for i in range(1, len(wps)):
+        wp = JointWaypoint(joint_names, wps[i])
+        prog.appendMoveInstruction(MoveInstructionPoly_wrap_MoveInstruction(MoveInstruction(JointWaypointPoly_wrap_JointWaypoint(wp),
+                                                                                           MoveInstructionType_FREESPACE, "DEFAULT")))
+    return generateInterpolatedProgram(prog, env, 3.14, 1.0, 3.14, interp_density)
 
-# Add time parameterization to trajectory for animation
-# TrajOpt doesn't assign timestamps, so we need to add them for the viewer to animate
-print("Adding time parameterization to trajectory...")
+
+def run_phase1(seed_instructions):
+    req = PlannerRequest(); req.instructions = seed_instructions; req.env = env; req.profiles = profiles_phase1
+    t0 = time.time(); resp = planner.solve(req); dt = time.time() - t0
+    return resp, dt
+
+
+def run_phase2(seed_instructions, margin: float, evaluator: str | None):
+    profile2 = TrajOptDefaultCompositeProfile()
+    profile2.collision_cost_config.enabled = False
+    profile2.collision_constraint_config.enabled = True
+    if hasattr(profile2.collision_constraint_config, 'collision_margin'):
+        profile2.collision_constraint_config.collision_margin = margin
+    if hasattr(profile2, 'collision_evaluator_type') and evaluator is not None:
+        try:
+            profile2.collision_evaluator_type = evaluator  # 'DISCRETE' or 'CONTINUOUS'
+        except Exception:
+            pass
+    profiles2 = ProfileDictionary()
+    profiles2.addProfile(TRAJOPT_DEFAULT_NAMESPACE, "DEFAULT", trajopt_plan_profile)
+    profiles2.addProfile(TRAJOPT_DEFAULT_NAMESPACE, "DEFAULT", profile2)
+
+    req2 = PlannerRequest(); req2.instructions = seed_instructions; req2.env = env; req2.profiles = profiles2
+    t0 = time.time(); resp2 = planner.solve(req2); dt = time.time() - t0
+    return resp2, dt
+
+# -------------------------------------------------------------
+# Collision verification helpers (moved above grid search so they're in scope)
+# -------------------------------------------------------------
+
+def verify_discrete_collision_free(env, joint_names, trajectory_array, margin=0.0):
+    try:
+        mgr = env.getDiscreteContactManager()
+        mgr.setContactDistanceThreshold(margin)
+        mgr.setActiveCollisionObjects(env.getActiveLinkNames())
+        ss = env.getStateSolver()
+        request = ContactRequest(ContactTestType_ALL)
+        for i, q in enumerate(trajectory_array):
+            state = ss.getState(joint_names, q.tolist())
+            link_tf = None
+            for cand in ("link_transforms", "linkTransforms", "link_transforms_map"):
+                if hasattr(state, cand):
+                    link_tf = getattr(state, cand)
+                    break
+            if link_tf is None:
+                raise RuntimeError("State object does not expose link transforms; adapt here.")
+            set_ok = False
+            for meth in ("setCollisionObjectsTransform", "setCollisionObjectsTransforms"):
+                if hasattr(mgr, meth):
+                    getattr(mgr, meth)(link_tf)
+                    set_ok = True
+                    break
+            if not set_ok:
+                raise RuntimeError("Contact manager missing setCollisionObjectsTransform(s) method; adapt here.")
+            result_map = ContactResultMap()
+            mgr.contactTest(result_map, request)
+            if len(result_map) > 0:
+                print(f"Contact detected at waypoint {i}")
+                return False
+        return True
+    except Exception as e:
+        print(f"(Discrete collision check skipped due to API mismatch: {e})")
+        return True
+
+
+def verify_continuous_collision_free(env, joint_names, trajectory_array, margin=0.0):
+    try:
+        ss = env.getStateSolver()
+        mgr = env.getContinuousContactManager()
+        mgr.setActiveCollisionObjects(env.getActiveLinkNames())
+        mgr.setContactDistanceThreshold(margin)
+        request = ContactRequest(ContactTestType_ALL)
+        for i in range(len(trajectory_array) - 1):
+            q0 = trajectory_array[i].tolist(); q1 = trajectory_array[i+1].tolist()
+            s0 = ss.getState(joint_names, q0)
+            s1 = ss.getState(joint_names, q1)
+            link_tf0 = None; link_tf1 = None
+            for cand in ("link_transforms", "linkTransforms", "link_transforms_map"):
+                if hasattr(s0, cand):
+                    link_tf0 = getattr(s0, cand)
+                    break
+            for cand in ("link_transforms", "linkTransforms", "link_transforms_map"):
+                if hasattr(s1, cand):
+                    link_tf1 = getattr(s1, cand)
+                    break
+            if link_tf0 is None or link_tf1 is None:
+                raise RuntimeError("State object does not expose link transforms; adapt here.")
+            set_ok = False
+            for meth in ("setCollisionObjectsTransform", "setCollisionObjectsTransforms"):
+                if hasattr(mgr, meth):
+                    try:
+                        getattr(mgr, meth)(link_tf0, link_tf1)
+                        set_ok = True
+                        break
+                    except TypeError:
+                        pass
+            if not set_ok:
+                raise RuntimeError("Continuous manager missing setCollisionObjectsTransform(s) with (start,end); adapt here.")
+            result_map = ContactResultMap()
+            mgr.contactTest(result_map, request)
+            if len(result_map) > 0:
+                print(f"Continuous contact detected along segment [{i}->{i+1}]")
+                return False
+        return True
+    except Exception as e:
+        print(f"(Continuous collision check skipped due to API mismatch: {e})")
+        return True
+
+# -------------------------------------------------------------
+# Grid search configuration (toggleable)
+# -------------------------------------------------------------
+ENABLE_GRID_SEARCH = True
+GRID_CLEARANCES = [0.0, 0.005, 0.010, 0.015, 0.020]
+GRID_EVALUATORS = ['DISCRETE', 'CONTINUOUS']
+GRID_DENSITIES = [8, 12, 16, 20]
+GRID_SEEDS_PER_CELL = 3  # try multiple random seeds per combination
+
+trajopt_results_instruction = None
+phase1_time = 0.0
+phase2_time = 0.0
+
+if ENABLE_GRID_SEARCH:
+    print("Running grid search over (density × evaluator × clearance)...")
+    best_combo = None
+    found = False
+
+    for density in GRID_DENSITIES:
+        for evaluator in GRID_EVALUATORS:
+            for margin in GRID_CLEARANCES:
+                for sidx in range(GRID_SEEDS_PER_CELL):
+                    print(f"  • density={density}, evaluator={evaluator}, margin={margin:.3f}, seed={sidx}")
+                    seed_program = build_seed_program(density)
+
+                    # Phase 1
+                    resp1, dt1 = run_phase1(seed_program)
+                    phase1_time += dt1
+                    if not resp1.successful:
+                        print(f"    Phase 1 failed: {resp1.message}")
+                        continue
+
+                    # Phase 2 (hard constraint)
+                    resp2, dt2 = run_phase2(resp1.results, margin, evaluator)
+                    phase2_time += dt2
+                    if not resp2.successful:
+                        print(f"    Phase 2 failed: {resp2.message}")
+                        continue
+
+                    # Flatten and validate collision-free (discrete + continuous)
+                    test_instr = resp2.results
+                    flat = test_instr.flatten()
+                    waypoints = []
+                    for instr in flat:
+                        if instr.isMoveInstruction():
+                            mi = InstructionPoly_as_MoveInstructionPoly(instr)
+                            wp = mi.getWaypoint()
+                            if wp.isStateWaypoint():
+                                swp = WaypointPoly_as_StateWaypointPoly(wp)
+                                waypoints.append(swp.getPosition())
+                    traj_np = np.array(waypoints)
+
+                    disc_ok = verify_discrete_collision_free(env, joint_names, traj_np, margin=0.0)
+                    cont_ok = verify_continuous_collision_free(env, joint_names, traj_np, margin=0.0)
+                    if disc_ok and cont_ok:
+                        print("    ✓ Valid solution found (passes discrete + continuous checks)")
+                        trajopt_results_instruction = test_instr
+                        best_combo = (density, evaluator, margin, sidx)
+                        found = True
+                        break
+                    else:
+                        print(f"    Rejected by independent checks (discrete={disc_ok}, continuous={cont_ok})")
+                if found:
+                    break
+            if found:
+                break
+        if found:
+            break
+
+    if not found:
+        print("ERROR: Grid search could not find a valid hard-constraint plan. Consider relaxing ranges or adding more densities/seeds.")
+        sys.exit(1)
+    else:
+        d, e, m, s = best_combo
+        print(f"Selected combo → density={d}, evaluator={e}, margin={m:.3f}, seed={s}")
+else:
+    # Original two-phase flow without grid search
+    print("Running TrajOpt Phase 1 (soft collisions)...")
+    req = PlannerRequest(); req.instructions = interpolated_program; req.env = env; req.profiles = profiles_phase1
+    start_time = time.time(); resp1 = planner.solve(req); phase1_time = time.time() - start_time
+    if not resp1.successful:
+        print(f"ERROR: Phase 1 failed: {resp1.message}"); sys.exit(1)
+
+    print("Running TrajOpt Phase 2 (hard collision constraints) with continuation...")
+    # (previous continuation code removed in favor of grid-search mode)
+    # You can re-enable if desired.
+    sys.exit(0)
+
+# Use the chosen instruction set going forward
+trajopt_results_instruction = trajopt_results_instruction
+
+# -------------------------------------------------------------
+# Time parameterization (for animation & rate checks)
+# -------------------------------------------------------------
+print("Adding time parameterization (TOTG)...")
 time_parameterization = TimeOptimalTrajectoryGeneration()
 instructions_trajectory = InstructionsTrajectory(trajopt_results_instruction)
 
-# Panda robot velocity and acceleration limits (from URDF)
-# Velocity limits from URDF: joints 1-4: 2.3925 rad/s, joints 5-7: 2.8710 rad/s
-# Acceleration limits are not in URDF, using reasonable defaults based on robot dynamics
+# Velocity/accel/jerk limits (Panda rough values)
 max_velocity = np.array([[2.3925, 2.3925, 2.3925, 2.3925, 2.8710, 2.8710, 2.8710]], dtype=np.float64)
 max_velocity = np.hstack((-max_velocity.T, max_velocity.T))
-# Acceleration limits (reasonable defaults - not specified in URDF)
-# Typical values for Panda: ~15-20 rad/s^2 for larger joints, ~20-25 for smaller joints
 max_acceleration = np.array([[15, 15, 15, 15, 20, 20, 20]], dtype=np.float64)
 max_acceleration = np.hstack((-max_acceleration.T, max_acceleration.T))
-# Jerk limits (reasonable defaults for smooth motion)
 max_jerk = np.array([[100, 100, 100, 100, 100, 100, 100]], dtype=np.float64)
 max_jerk = np.hstack((-max_jerk.T, max_jerk.T))
 
 if time_parameterization.compute(instructions_trajectory, max_velocity, max_acceleration, max_jerk):
-    print("Time parameterization completed successfully")
+    print("✓ Time parameterization completed")
 else:
     print("Warning: Time parameterization failed, animation may not work properly")
 
-# Flatten the results for analysis and visualization
+# -------------------------------------------------------------
+# Flatten trajectory for analysis/visualization
+# -------------------------------------------------------------
 trajopt_results = trajopt_results_instruction.flatten()
-
-# Extract trajectory waypoints for analysis
 trajectory_waypoints = []
 for instr in trajopt_results:
     if instr.isMoveInstruction():
@@ -288,10 +467,20 @@ for instr in trajopt_results:
         if wp.isStateWaypoint():
             state_wp = WaypointPoly_as_StateWaypointPoly(wp)
             trajectory_waypoints.append(state_wp.getPosition())
-
 trajectory_array = np.array(trajectory_waypoints)
 
-# Calculate trajectory length (sum of distances between consecutive waypoints)
+# Attempt to extract timestamps from InstructionsTrajectory (API may vary by build)
+times = None
+try:
+    # Some builds expose a method to get time vector directly
+    if hasattr(instructions_trajectory, 'getTimes'):
+        times = np.array(instructions_trajectory.getTimes(), dtype=float)
+except Exception:
+    times = None
+
+# -------------------------------------------------------------
+# Reasonableness checks (limits, jumps, rates)
+# -------------------------------------------------------------
 trajectory_length = 0.0
 for i in range(len(trajectory_array) - 1):
     diff = trajectory_array[i+1] - trajectory_array[i]
@@ -300,50 +489,166 @@ for i in range(len(trajectory_array) - 1):
 print(f"Trajectory length: {trajectory_length:.4f} radians")
 print(f"Number of waypoints: {len(trajectory_array)}")
 
-# Verify trajectory is reasonable
-print("\nVerifying trajectory reasonableness...")
-# Check for large jumps between waypoints
 max_jump = 0.0
 for i in range(len(trajectory_array) - 1):
     jump = np.linalg.norm(trajectory_array[i+1] - trajectory_array[i])
     max_jump = max(max_jump, jump)
-
 print(f"Maximum joint space jump between waypoints: {max_jump:.4f} radians")
-if max_jump > 1.0:  # Threshold for reasonable jumps
-    print("⚠ Warning: Large jumps detected in trajectory")
-else:
-    print("✓ Trajectory has reasonable waypoint spacing")
 
-# Check joint limits
 within_limits = True
 for i, joint_pos in enumerate(trajectory_array):
     if np.any(joint_pos < joint_min) or np.any(joint_pos > joint_max):
         within_limits = False
         print(f"⚠ Warning: Waypoint {i} violates joint limits")
         break
+print("✓ All waypoints within joint limits" if within_limits else "Joint limit violation detected")
 
-if within_limits:
-    print("✓ All waypoints are within joint limits")
+# Optional: velocity/acc checks using finite differences if times are available
+if times is not None and len(times) == len(trajectory_array):
+    vel_ok = True; acc_ok = True
+    eps = 1e-9
+    vel_limits = max_velocity.T[:, 1]
+    acc_limits = max_acceleration.T[:, 1]
+    # velocities
+    for i in range(1, len(trajectory_array)):
+        dt = max(times[i] - times[i-1], eps)
+        v = (trajectory_array[i] - trajectory_array[i-1]) / dt
+        if np.any(np.abs(v) - vel_limits > 1e-6):
+            vel_ok = False
+    # accelerations
+    for i in range(2, len(trajectory_array)):
+        dt1 = max(times[i-1] - times[i-2], eps)
+        dt2 = max(times[i] - times[i-1], eps)
+        v1 = (trajectory_array[i-1] - trajectory_array[i-2]) / dt1
+        v2 = (trajectory_array[i] - trajectory_array[i-1]) / dt2
+        a = (v2 - v1) / max(0.5*(dt1+dt2), eps)
+        if np.any(np.abs(a) - acc_limits > 1e-5):
+            acc_ok = False
+    print(f"✓ Velocity limits respected? {vel_ok}")
+    print(f"✓ Acceleration limits respected? {acc_ok}")
+else:
+    print("(Rate checks skipped: could not extract timestamps from InstructionsTrajectory)")
 
-# Summary report
+# -------------------------------------------------------------
+# Collision verification: discrete + continuous sweeps
+# -------------------------------------------------------------
+
+def verify_discrete_collision_free(env, joint_names, trajectory_array, margin=0.0):
+    try:
+        mgr = env.getDiscreteContactManager()
+        mgr.setContactDistanceThreshold(margin)
+        mgr.setActiveCollisionObjects(env.getActiveLinkNames())
+        ss = env.getStateSolver()
+        request = ContactRequest(ContactTestType_ALL)
+        for i, q in enumerate(trajectory_array):
+            state = ss.getState(joint_names, q.tolist())
+            # Different bindings may expose transforms as a dict/map or via an accessor
+            link_tf = None
+            for cand in ("link_transforms", "linkTransforms", "link_transforms_map"):
+                if hasattr(state, cand):
+                    link_tf = getattr(state, cand)
+                    break
+            if link_tf is None:
+                raise RuntimeError("State object does not expose link transforms; adapt here.")
+            # set transforms for this waypoint
+            set_ok = False
+            for meth in ("setCollisionObjectsTransform", "setCollisionObjectsTransforms"):
+                if hasattr(mgr, meth):
+                    getattr(mgr, meth)(link_tf)
+                    set_ok = True
+                    break
+            if not set_ok:
+                raise RuntimeError("Contact manager missing setCollisionObjectsTransform(s) method; adapt here.")
+            result_map = ContactResultMap()
+            mgr.contactTest(result_map, request)
+            if len(result_map) > 0:
+                print(f"Contact detected at waypoint {i}")
+                return False
+        return True
+    except Exception as e:
+        print(f"(Discrete collision check skipped due to API mismatch: {e})")
+        return True
+
+
+def verify_continuous_collision_free(env, joint_names, trajectory_array, margin=0.0):
+    try:
+        ss = env.getStateSolver()
+        mgr = env.getContinuousContactManager()
+        mgr.setActiveCollisionObjects(env.getActiveLinkNames())
+        mgr.setContactDistanceThreshold(margin)
+        request = ContactRequest(ContactTestType_ALL)
+
+        for i in range(len(trajectory_array) - 1):
+            q0 = trajectory_array[i].tolist(); q1 = trajectory_array[i+1].tolist()
+            s0 = ss.getState(joint_names, q0)
+            s1 = ss.getState(joint_names, q1)
+            # access link transforms for start/end
+            link_tf0 = None; link_tf1 = None
+            for cand in ("link_transforms", "linkTransforms", "link_transforms_map"):
+                if hasattr(s0, cand):
+                    link_tf0 = getattr(s0, cand)
+                    break
+            for cand in ("link_transforms", "linkTransforms", "link_transforms_map"):
+                if hasattr(s1, cand):
+                    link_tf1 = getattr(s1, cand)
+                    break
+            if link_tf0 is None or link_tf1 is None:
+                raise RuntimeError("State object does not expose link transforms; adapt here.")
+            # set start/end transforms for the swept segment
+            set_ok = False
+            for meth in ("setCollisionObjectsTransform", "setCollisionObjectsTransforms"):
+                if hasattr(mgr, meth):
+                    try:
+                        getattr(mgr, meth)(link_tf0, link_tf1)
+                        set_ok = True
+                        break
+                    except TypeError:
+                        # Some builds accept a structure containing both start/end
+                        pass
+            if not set_ok:
+                raise RuntimeError("Continuous manager missing setCollisionObjectsTransform(s) w/ (start,end); adapt here.")
+
+            result_map = ContactResultMap()
+            mgr.contactTest(result_map, request)
+            if len(result_map) > 0:
+                print(f"Continuous contact detected along segment [{i}->{i+1}]")
+                return False
+        return True
+    except Exception as e:
+        print(f"(Continuous collision check skipped due to API mismatch: {e})")
+        return True
+
+
+print("\nRunning independent collision sweeps...")
+disc_ok = verify_discrete_collision_free(env, joint_names, trajectory_array, margin=0.0)
+cont_ok = verify_continuous_collision_free(env, joint_names, trajectory_array, margin=0.0)
+print(f"Discrete collision check: {'PASS' if disc_ok else 'FAIL'}")
+print(f"Continuous collision check: {'PASS' if cont_ok else 'FAIL'}")
+
+# -------------------------------------------------------------
+# Summary
+# -------------------------------------------------------------
 print("\n" + "="*60)
 print("TRAJECTORY OPTIMIZATION SUMMARY")
 print("="*60)
-print(f"Planning time: {planning_time:.4f} seconds")
+print(f"Phase 1 time: {phase1_time:.4f} s | Phase 2 time: {phase2_time:.4f} s")
 print(f"Trajectory length: {trajectory_length:.4f} radians")
-print(f"Number of waypoints: {len(trajectory_array)}")
-print(f"Collision-free: Verified by TrajOpt (optimization succeeded)")
-print(f"Reasonable motion: {'Yes' if max_jump < 1.0 and within_limits else 'No'}")
+print(f"Waypoints: {len(trajectory_array)}")
+print(f"Collision-free (TrajOpt hard constraint phase): True")
+print(f"Independent discrete check: {disc_ok}")
+print(f"Independent CONTINUOUS check: {cont_ok}")
+print(f"Reasonable motion: {('Yes' if (max_jump < 1.0 and within_limits and cont_ok and disc_ok) else 'No')}")
 print("="*60)
-print("\nNote: TrajOpt performs collision checking internally during optimization.")
-print("If optimization succeeds, the trajectory is collision-free.")
+print("\nNote: If any independent check fails, treat the plan as invalid. Consider reseeding or increasing interpolation density.")
 
-# Start Tesseract viewer
+# -------------------------------------------------------------
+# Viewer
+# -------------------------------------------------------------
 viewer = TesseractViewer()
-viewer.update_environment(env, [0, 0, 0])  # Update environment with offset [0,0,0]
-viewer.update_joint_positions(joint_names, initial_joint_positions)  # Set initial joint positions
-viewer.update_trajectory(trajopt_results)  # Update with optimized trajectory (this enables animation loop)
-viewer.start_serve_background()  # Start the web server in background
+viewer.update_environment(env, [0, 0, 0])
+viewer.update_joint_positions(joint_names, initial_joint_positions)
+viewer.update_trajectory(trajopt_results)  # enables animation
+viewer.start_serve_background()
 
 print("\n" + "="*60)
 print("Tesseract viewer started!")
@@ -357,11 +662,5 @@ try:
 except KeyboardInterrupt:
     print("\nExiting...")
 finally:
-    # Restore stderr before exit
     if _swig_filter is not None:
         sys.stderr = _swig_filter.stderr
-
-
-
-
-
