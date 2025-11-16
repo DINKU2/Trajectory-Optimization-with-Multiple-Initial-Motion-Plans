@@ -24,43 +24,28 @@ from tesseract_robotics.tesseract_collision import (ContactResultMap, ContactTes
 from tesseract_robotics_viewer import TesseractViewer
 
 from vamp_trajopt_integration import (
-    generate_vamp_paths, 
+    generate_vamp_RRTC_paths, 
     vamp_path_to_tesseract_program, 
     calculate_trajectory_length, 
     get_trajectory_duration
 )
+from helper_function import SWIGWarningFilter, add_target_marker
 
 
 USE_OBSTACLES = True  
-
-# Suppress SWIG memory leak warnings (known limitation - memory is properly managed by C++ environment)
-# SWIG prints these warnings directly to stderr, so we'll filter them
-class SWIGWarningFilter:
-    """Filter to suppress SWIG memory leak warnings"""
-    def __init__(self):
-        self.stderr = sys.stderr
-        self.filtered = False
-    
-    def write(self, text):
-        if 'memory leak' in text.lower() and 'swig' in text.lower():
-            return  # Suppress SWIG memory leak warnings
-        self.stderr.write(text)
-    
-    def flush(self):
-        self.stderr.flush()
-
-# Install filter to catch SWIG memory leak warnings
 _swig_filter = None
 
-# Set TESSERACT_RESOURCE_PATH to include project/assets/
+# Resource path setup
 assets_path = Path(__file__).parent / "assets"
 current_path = os.environ.get("TESSERACT_RESOURCE_PATH", "")
 if str(assets_path) not in current_path:
     if current_path:
         separator = ";" if os.name == 'nt' else ":"
         os.environ["TESSERACT_RESOURCE_PATH"] = f"{current_path}{separator}{assets_path}"
+        print("option 1")
     else:
         os.environ["TESSERACT_RESOURCE_PATH"] = str(assets_path)
+        print("option 2")
 
 locator = GeneralResourceLocator()
 env = Environment()
@@ -70,10 +55,8 @@ urdf_path = FilesystemPath(urdf_path_str)
 srdf_path = FilesystemPath(srdf_path_str)
 assert env.init(urdf_path, srdf_path, locator)
 
-# Configure contact manager plugins
-# Load contact manager plugins configuration from YAML file
+# LoadContact manager plugins 
 contact_manager_config_path = Path(__file__).parent / "assets" / "panda" / "contact_manager_plugins.yaml"
-# Keep references to prevent SWIG memory leak warnings (objects are properly managed by environment)
 _contact_manager_plugin_info = None
 _contact_manager_cmd = None
 try:
@@ -82,22 +65,18 @@ try:
     _contact_manager_plugin_info = parseContactManagersPluginConfigString(contact_manager_yaml)
     _contact_manager_cmd = AddContactManagersPluginInfoCommand(_contact_manager_plugin_info)
     env.applyCommand(_contact_manager_cmd)
-    # Keep references alive to help SWIG with cleanup
-    # The environment takes ownership, but SWIG needs these references for proper cleanup
     print("Contact manager plugins configured successfully")
-    # Install SWIG warning filter to suppress memory leak warnings
     _swig_filter = SWIGWarningFilter()
     sys.stderr = _swig_filter
 except Exception as e:
     print(f"Warning: Could not load contact manager plugins: {e}")
-    print("TrajOpt may still work, but collision checking might be limited")
 
-# Set initial robot state
-joint_names = [f"panda_joint{i+1}" for i in range(7)]  # Panda has 7 joints
-initial_joint_positions = np.zeros(7)  # All joints at zero position
+# Set initial robot state with all 7 joints at zero position
+joint_names = [f"panda_joint{i+1}" for i in range(7)]  
+initial_joint_positions = np.zeros(7)  
 env.setState(joint_names, initial_joint_positions)
 
-# Parse obstacles from obstacles.txt and add them as spheres (if enabled)
+# Add obstacles to the environment
 if USE_OBSTACLES:
     obstacles_file = Path(__file__).parent / "assets" / "obstacles" / "obstacles.txt"
     obstacle_radius = 0.2
@@ -160,6 +139,13 @@ print("="*60)
 start_config = np.array([0.0, -0.785, 0.0, -2.356, 0.0, 1.571, 0.785], dtype=np.float64)
 goal_config = np.array([2.35, 1., 0., -0.8, 0, 2.5, 0.785], dtype=np.float64)
 
+# Add visual markers for start and goal positions (for debugging)
+print("\nAdding visual markers for start and goal positions...")
+add_target_marker(env, joint_group, joint_names, start_config, "start_marker", 
+                 tcp_frame=manip_info.tcp_frame, marker_radius=0.01)
+add_target_marker(env, joint_group, joint_names, goal_config, "goal_marker", 
+                 tcp_frame=manip_info.tcp_frame, marker_radius=0.01)
+        
 # Get obstacle centers for VAMP (same obstacles as Tesseract environment)
 obstacle_centers = []
 if USE_OBSTACLES:
@@ -174,7 +160,7 @@ if USE_OBSTACLES:
 # Generate multiple initial paths using VAMP RRT-Connect
 NUM_SEEDS = 5  # Number of different random seeds to try
 print(f"\nStep 1: Generating {NUM_SEEDS} initial paths with VAMP RRT-Connect...")
-vamp_paths, successful_seeds = generate_vamp_paths(
+vamp_paths, successful_seeds = generate_vamp_RRTC_paths(
     start_config, 
     goal_config, 
     obstacle_centers, 
@@ -221,6 +207,11 @@ for path_idx, vamp_path in enumerate(vamp_paths):
     # Interpolate to get dense waypoints for TrajOpt
     interpolated_program = generateInterpolatedProgram(program, env, 3.14, 1.0, 3.14, 5)
     
+    # Count waypoints in interpolated program
+    interp_flat = interpolated_program.flatten()
+    interp_waypoint_count = sum(1 for instr in interp_flat if instr.isMoveInstruction())
+    print(f"    Initial waypoints (after interpolation): {interp_waypoint_count}")
+    
     # Create TrajOpt planning request
     trajopt_request = PlannerRequest()
     trajopt_request.instructions = interpolated_program
@@ -248,6 +239,10 @@ for path_idx, vamp_path in enumerate(vamp_paths):
         try:
             trajopt_results_instruction = trajopt_response.results
             trajopt_results = trajopt_results_instruction.flatten()
+            
+            # Count waypoints in optimized trajectory
+            opt_waypoint_count = len(trajopt_results)
+            print(f"    Optimized waypoints: {opt_waypoint_count}")
             
             # Calculate metrics (before time parameterization, waypoints are JointWaypoints)
             trajectory_length = calculate_trajectory_length(trajopt_results)
@@ -388,7 +383,7 @@ print("  - Best trajectory selected from multiple optimizations")
 print("  - Expected: Better results due to collision-free initial paths")
 print("="*60)
 
-# Start Tesseract viewer
+# Start Tesseract viewersd
 print("\nStarting Tesseract viewer...")
 try:
     viewer = TesseractViewer()
