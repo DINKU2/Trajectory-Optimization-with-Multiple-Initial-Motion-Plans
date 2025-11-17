@@ -242,14 +242,14 @@ for attr, val in [
     if hasattr(trajopt_plan_profile, attr):
         setattr(trajopt_plan_profile, attr, val)
 
-# Try to set some stronger smoothness coefficients if available
+# Stronger smoothness coefficients (if available)
 for name, value in [
-    ("velocity_coeff", [5.0] * 7),
-    ("acceleration_coeff", [2.0] * 7),
-    ("jerk_coeff", [1.0] * 7),
-    ("velocity_coeffs", [5.0] * 7),
-    ("acceleration_coeffs", [2.0] * 7),
-    ("jerk_coeffs", [1.0] * 7),
+    ("velocity_coeff",     [10.0] * 7),
+    ("acceleration_coeff", [5.0]  * 7),
+    ("jerk_coeff",         [2.0]  * 7),
+    ("velocity_coeffs",     [10.0] * 7),
+    ("acceleration_coeffs", [5.0]  * 7),
+    ("jerk_coeffs",         [2.0]  * 7),
 ]:
     if hasattr(trajopt_plan_profile, name):
         setattr(trajopt_plan_profile, name, value)
@@ -276,9 +276,9 @@ trajopt_profiles.addProfile(TRAJOPT_DEFAULT_NAMESPACE, "DEFAULT", trajopt_compos
 trajopt_planner = TrajOptMotionPlanner(TRAJOPT_DEFAULT_NAMESPACE)
 
 # ============================================================
-# Multi-seed loop (you can increase NUM_SEEDS later)
+# Multi-seed loop
 # ============================================================
-NUM_SEEDS = 1  # Try more (e.g. 5–10) once it's working well
+NUM_SEEDS = 30  # run 30 different seeds
 print(f"\nTrying {NUM_SEEDS} different random initializations...")
 all_results = []
 
@@ -292,8 +292,6 @@ for seed_idx in range(NUM_SEEDS):
     print(f"    Seed waypoints (after interpolation): {seed_waypoint_count}")
 
     trajopt_request = PlannerRequest()
-    # In this Python build, PlannerRequest has no .seed member,
-    # so we pass the dense program directly as instructions.
     trajopt_request.instructions = seed_program
     trajopt_request.env = env
     trajopt_request.profiles = trajopt_profiles
@@ -370,7 +368,7 @@ for seed_idx in range(NUM_SEEDS):
         print(f"    ✗ Exception - {e}")
 
 # ============================================================
-# Choose best trajectory
+# Choose best trajectory (by planning time) + stats + extremes
 # ============================================================
 successful_results = [r for r in all_results if r['successful']]
 
@@ -380,12 +378,73 @@ if not successful_results:
         sys.stderr = _swig_filter.stderr
     sys.exit(1)
 
-print(f"\nComparing {len(successful_results)} successful trajectories...")
-best_result = min(successful_results, key=lambda x: x['trajectory_length'])
+planning_times = np.array([r['planning_time'] for r in successful_results], dtype=float)
+traj_lengths = np.array([r['trajectory_length'] for r in successful_results], dtype=float)
 
-print(f"\nBest trajectory: Seed {best_result['seed_idx'] + 1} (Seed {best_result['seed']})")
-print(f"  Trajectory length: {best_result['trajectory_length']:.4f} radians")
+def summarize_stats(arr):
+    mean_val = float(np.mean(arr))
+    median_val = float(np.median(arr))
+    # Standard deviation (sample, ddof=1) – fall back to 0 if only one sample
+    std_val = float(np.std(arr, ddof=1)) if len(arr) > 1 else 0.0
+    # Simple "mode": most common value after rounding to 3 decimals
+    rounded = np.round(arr, 3)
+    unique, counts = np.unique(rounded, return_counts=True)
+    idx = int(np.argmax(counts))
+    mode_val = float(unique[idx])
+    mode_count = int(counts[idx])
+    return mean_val, median_val, std_val, mode_val, mode_count
+
+pt_mean, pt_median, pt_std, pt_mode, pt_mode_count = summarize_stats(planning_times)
+len_mean, len_median, len_std, len_mode, len_mode_count = summarize_stats(traj_lengths)
+
+print(f"\nComparing {len(successful_results)} successful trajectories...")
+print("Planning time statistics (seconds):")
+print(f"  Mean   : {pt_mean:.4f}")
+print(f"  Median : {pt_median:.4f}")
+print(f"  Std    : {pt_std:.4f}")
+print(f"  Mode≈  : {pt_mode:.4f} (occurs {pt_mode_count} times, rounded to 3 decimals)")
+
+print("Trajectory length statistics (radians):")
+print(f"  Mean   : {len_mean:.4f}")
+print(f"  Median : {len_median:.4f}")
+print(f"  Std    : {len_std:.4f}")
+print(f"  Mode≈  : {len_mode:.4f} (occurs {len_mode_count} times, rounded to 3 decimals)")
+
+# Best/worst by planning time
+best_time_result = min(successful_results, key=lambda x: x['planning_time'])
+worst_time_result = max(successful_results, key=lambda x: x['planning_time'])
+
+# Best/worst by trajectory length
+best_len_result = min(successful_results, key=lambda x: x['trajectory_length'])
+worst_len_result = max(successful_results, key=lambda x: x['trajectory_length'])
+
+print("\n=== Extremes over successful runs ===")
+print("By planning time:")
+print(f"  Best (fastest): seed_idx={best_time_result['seed_idx']} "
+      f"seed={best_time_result['seed']} "
+      f"time={best_time_result['planning_time']:.4f}s "
+      f"length={best_time_result['trajectory_length']:.4f}rad")
+print(f"  Worst (slowest): seed_idx={worst_time_result['seed_idx']} "
+      f"seed={worst_time_result['seed']} "
+      f"time={worst_time_result['planning_time']:.4f}s "
+      f"length={worst_time_result['trajectory_length']:.4f}rad")
+
+print("By trajectory length:")
+print(f"  Best (shortest): seed_idx={best_len_result['seed_idx']} "
+      f"seed={best_len_result['seed']} "
+      f"length={best_len_result['trajectory_length']:.4f}rad "
+      f"time={best_len_result['planning_time']:.4f}s")
+print(f"  Worst (longest): seed_idx={worst_len_result['seed_idx']} "
+      f"seed={worst_len_result['seed']} "
+      f"length={worst_len_result['trajectory_length']:.4f}rad "
+      f"time={worst_len_result['planning_time']:.4f}s")
+
+# Pick best by planning time for visualization
+best_result = best_time_result
+
+print(f"\nBest trajectory (by planning time): Seed {best_result['seed_idx'] + 1} (Seed {best_result['seed']})")
 print(f"  Planning time: {best_result['planning_time']:.4f} seconds")
+print(f"  Trajectory length: {best_result['trajectory_length']:.4f} radians")
 
 trajopt_results_instruction = best_result['trajectory_instruction']
 planning_time = best_result['planning_time']
@@ -478,9 +537,68 @@ else:
     trajectory_array_time_param = trajectory_array
 
 # ============================================================
-# Filter near-duplicate waypoints (remove tiny jitters)
+# Post-processing: shortcut + duplicate filter (trajectory_array_time_param)
 # ============================================================
-def filter_duplicate_waypoints(traj_array, tol=1e-3):
+def is_segment_collision_free(q_start, q_end, num_checks=10):
+    """
+    Check straight-line in joint space between q_start and q_end for collisions.
+    """
+    ss = env.getStateSolver()
+    manager = env.getDiscreteContactManager()
+    manager.setActiveCollisionObjects(env.getActiveLinkNames())
+
+    for k in range(num_checks + 1):
+        alpha = k / float(num_checks)
+        q = (1.0 - alpha) * q_start + alpha * q_end
+        ss.setState(joint_names, q)
+        scene_state = ss.getState()
+        manager.setCollisionObjectsTransform(scene_state.link_transforms)
+
+        crm = ContactResultMap()
+        manager.contactTest(crm, ContactRequest(ContactTestType_ALL))
+        results = ContactResultVector()
+        crm.flattenMoveResults(results)
+        if len(results) > 0:
+            return False
+    return True
+
+def shortcut_trajectory(traj_array, num_iters=300, max_span=8):
+    """
+    Randomized shortcutting:
+    try to replace sections of the trajectory with a straight joint-space segment
+    if that segment is collision-free.
+    """
+    if len(traj_array) < 3:
+        return traj_array.copy()
+
+    traj = traj_array.copy()
+    n = len(traj)
+
+    for _ in range(num_iters):
+        if n < 3:
+            break
+
+        i = np.random.randint(0, n - 2)
+        j_min = i + 2
+        j_max = min(i + max_span, n - 1)
+        if j_min > j_max:
+            continue
+        j = np.random.randint(j_min, j_max + 1)
+
+        q_i = traj[i]
+        q_j = traj[j]
+
+        if is_segment_collision_free(q_i, q_j, num_checks=10):
+            # Replace middle segment with direct connection
+            traj = np.vstack([traj[:i+1], traj[j:]])
+            n = len(traj)
+
+    return traj
+
+def filter_duplicate_waypoints(traj_array, tol=5e-3):
+    """
+    Remove near-duplicate consecutive waypoints (tiny jitters).
+    """
     if len(traj_array) == 0:
         return traj_array
     filtered = [traj_array[0]]
@@ -489,9 +607,9 @@ def filter_duplicate_waypoints(traj_array, tol=1e-3):
             filtered.append(q)
     return np.array(filtered)
 
-trajectory_array_time_param = filter_duplicate_waypoints(
-    trajectory_array_time_param, tol=1e-3
-)
+# Apply shortcutting first, then deduplicate
+trajectory_array_time_param = shortcut_trajectory(trajectory_array_time_param, num_iters=300, max_span=8)
+trajectory_array_time_param = filter_duplicate_waypoints(trajectory_array_time_param, tol=5e-3)
 
 # ============================================================
 # Verify trajectory reasonableness
@@ -514,8 +632,10 @@ print("PART 1: TRAJECTORY OPTIMIZATION SUMMARY")
 print("="*60)
 print(f"Environment: {'With obstacles' if USE_OBSTACLES else 'Empty (no obstacles)'}")
 print(f"Total successful optimizations: {len(successful_results)}/{NUM_SEEDS}")
-print(f"Planning time: {planning_time:.4f} seconds")
-print(f"Trajectory length: {trajectory_length:.4f} radians")
+print(f"Best planning time (s): {planning_time:.4f}")
+print(f"Best trajectory length (rad): {trajectory_length:.4f}")
+print(f"Planning time stats (s): mean={pt_mean:.4f}, median={pt_median:.4f}, std={pt_std:.4f}, mode≈{pt_mode:.4f}")
+print(f"Trajectory length stats (rad): mean={len_mean:.4f}, median={len_median:.4f}, std={len_std:.4f}, mode≈{len_mode:.4f}")
 print(f"Number of waypoints (after filtering): {len(trajectory_array_time_param)}")
 print(f"Maximum joint space jump: {max_jump:.4f} radians")
 print(f"Within joint limits: {'Yes' if within_limits else 'No'}")
@@ -525,12 +645,14 @@ print("="*60)
 
 # ============================================================
 # Viewer
+# (shows ONLY the best-by-time trajectory)
 # ============================================================
 print("\nStarting Tesseract viewer...")
 try:
     viewer = TesseractViewer()
     viewer.update_environment(env, [0, 0, 0])
     viewer.update_joint_positions(joint_names, start_config)
+    # This trajectory is computed from best_result only:
     viewer.update_trajectory(trajopt_results_time_param)
     viewer.start_serve_background()
     viewer_started = True
@@ -560,7 +682,7 @@ if viewer_started:
     print("\n" + "="*60)
     print("Tesseract viewer started!")
     print("Open your browser and navigate to: http://localhost:8000")
-    print("The optimized trajectory will be displayed in the viewer.")
+    print("The optimized trajectory (best by planning time) will be displayed in the viewer.")
     print("(Ignore any web server errors - they're harmless)")
     print("="*60)
     print("Press Enter to exit...")

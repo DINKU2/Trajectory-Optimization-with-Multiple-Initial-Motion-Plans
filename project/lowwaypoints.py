@@ -242,14 +242,14 @@ for attr, val in [
     if hasattr(trajopt_plan_profile, attr):
         setattr(trajopt_plan_profile, attr, val)
 
-# Try to set some stronger smoothness coefficients if available
+# Stronger smoothness coefficients (if available)
 for name, value in [
-    ("velocity_coeff", [5.0] * 7),
-    ("acceleration_coeff", [2.0] * 7),
-    ("jerk_coeff", [1.0] * 7),
-    ("velocity_coeffs", [5.0] * 7),
-    ("acceleration_coeffs", [2.0] * 7),
-    ("jerk_coeffs", [1.0] * 7),
+    ("velocity_coeff",     [10.0] * 7),
+    ("acceleration_coeff", [5.0]  * 7),
+    ("jerk_coeff",         [2.0]  * 7),
+    ("velocity_coeffs",     [10.0] * 7),
+    ("acceleration_coeffs", [5.0]  * 7),
+    ("jerk_coeffs",         [2.0]  * 7),
 ]:
     if hasattr(trajopt_plan_profile, name):
         setattr(trajopt_plan_profile, name, value)
@@ -478,9 +478,68 @@ else:
     trajectory_array_time_param = trajectory_array
 
 # ============================================================
-# Filter near-duplicate waypoints (remove tiny jitters)
+# Post-processing: shortcut + duplicate filter (trajectory_array_time_param)
 # ============================================================
-def filter_duplicate_waypoints(traj_array, tol=1e-3):
+def is_segment_collision_free(q_start, q_end, num_checks=10):
+    """
+    Check straight-line in joint space between q_start and q_end for collisions.
+    """
+    ss = env.getStateSolver()
+    manager = env.getDiscreteContactManager()
+    manager.setActiveCollisionObjects(env.getActiveLinkNames())
+
+    for k in range(num_checks + 1):
+        alpha = k / float(num_checks)
+        q = (1.0 - alpha) * q_start + alpha * q_end
+        ss.setState(joint_names, q)
+        scene_state = ss.getState()
+        manager.setCollisionObjectsTransform(scene_state.link_transforms)
+
+        crm = ContactResultMap()
+        manager.contactTest(crm, ContactRequest(ContactTestType_ALL))
+        results = ContactResultVector()
+        crm.flattenMoveResults(results)
+        if len(results) > 0:
+            return False
+    return True
+
+def shortcut_trajectory(traj_array, num_iters=300, max_span=8):
+    """
+    Randomized shortcutting:
+    try to replace sections of the trajectory with a straight joint-space segment
+    if that segment is collision-free.
+    """
+    if len(traj_array) < 3:
+        return traj_array.copy()
+
+    traj = traj_array.copy()
+    n = len(traj)
+
+    for _ in range(num_iters):
+        if n < 3:
+            break
+
+        i = np.random.randint(0, n - 2)
+        j_min = i + 2
+        j_max = min(i + max_span, n - 1)
+        if j_min > j_max:
+            continue
+        j = np.random.randint(j_min, j_max + 1)
+
+        q_i = traj[i]
+        q_j = traj[j]
+
+        if is_segment_collision_free(q_i, q_j, num_checks=10):
+            # Replace middle segment with direct connection
+            traj = np.vstack([traj[:i+1], traj[j:]])
+            n = len(traj)
+
+    return traj
+
+def filter_duplicate_waypoints(traj_array, tol=5e-3):
+    """
+    Remove near-duplicate consecutive waypoints (tiny jitters).
+    """
     if len(traj_array) == 0:
         return traj_array
     filtered = [traj_array[0]]
@@ -489,9 +548,9 @@ def filter_duplicate_waypoints(traj_array, tol=1e-3):
             filtered.append(q)
     return np.array(filtered)
 
-trajectory_array_time_param = filter_duplicate_waypoints(
-    trajectory_array_time_param, tol=1e-3
-)
+# Apply shortcutting first, then deduplicate
+trajectory_array_time_param = shortcut_trajectory(trajectory_array_time_param, num_iters=300, max_span=8)
+trajectory_array_time_param = filter_duplicate_waypoints(trajectory_array_time_param, tol=5e-3)
 
 # ============================================================
 # Verify trajectory reasonableness
@@ -525,6 +584,7 @@ print("="*60)
 
 # ============================================================
 # Viewer
+# (unchanged, per your request)
 # ============================================================
 print("\nStarting Tesseract viewer...")
 try:
