@@ -23,7 +23,7 @@ Run on Windows locally using the setup script:
 # Setup environment
 .\setup_local_env.ps1
 
-# Activate environment
+# Activate environment (May already be activated from the setup script)
 .\traj_opt_env\Scripts\Activate.ps1
 
 # Run Part 1
@@ -36,7 +36,12 @@ Run on Ubuntu 22.04 or WSL:
 
 ```bash
 # Setup environment
-bash setup_wsl_env.sh
+python3 -m venv traj_opt_env_wsl
+source traj_opt_env_wsl/bin/activate
+
+pip install vamp-planner
+pip install tesseract-robotics tesseract-robotics-viewer setuptools
+pip install numpy
 
 # Activate environment
 source traj_opt_env_wsl/bin/activate
