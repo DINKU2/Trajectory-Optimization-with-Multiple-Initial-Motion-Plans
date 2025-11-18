@@ -13,9 +13,25 @@ Modern robots require motions that are safe, smooth, and efficient, which geomet
 
 ---
 
+## Project Overview
+
+### Part 1: TrajOpt with Random Initialization
+
+Implements trajectory optimization using **TrajOpt** for the 7-DOF Panda robot in an environment with 14 spherical obstacles. The trajectory is initialized with a **random interpolation** between start and goal configurations. This establishes a baseline for trajectory quality and planning success rate.
+
+**Key Metrics:** Trajectory length, planning time, success rate with random seeds.
+
+### Part 2: TrajOpt with RRT-Connect Seeding
+
+Uses **VAMP's RRT-Connect** planner to generate multiple geometric paths with different random seeds. Each path is densely interpolated and used to initialize TrajOpt. The optimizer refines each trajectory, and the **best trajectory** (shortest length/duration) is selected. This approach improves reliability by exploring multiple initial solutions.
+
+**Key Comparison:** Does better initialization improve trajectory quality and success rate compared to random initialization?
+
+---
+
 ## How to Run
 
-### Part 1 (Windows - Local)
+### Part 1 (Windows - Local Python Version 3.12)
 
 Run on Windows locally using the setup script:
 
@@ -61,14 +77,14 @@ git clone --depth=1 https://github.com/tesseract-robotics/tesseract_planning.git
 git clone --depth=1 https://github.com/tesseract-robotics/tesseract_python.git
 ```
 
-### Environment Variables (Optional)
+### Environment Variables 
 
-Set `TESSERACT_RESOURCE_PATH` and `TESSERACT_TASK_COMPOSER_CONFIG_FILE` if using Tesseract examples:
+Set `TESSERACT_RESOURCE_PATH` and `TESSERACT_TASK_COMPOSER_CONFIG_FILE` if using Tesseract examples from clone:
 
 **Linux/WSL:**
 ```bash
 export TESSERACT_RESOURCE_PATH=`pwd`/tesseract
-export TESSERACT_TASK_COMPOSER_CONFIG_FILE=`pwd`/tesseract_planning/tesseract_task_composer/config/task_composer_plugins_no_trajopt_ifopt.yaml
+export TESSERACT_TASK_COMPOSER_CONFIG_FILE=`pwd`/tesseract_planning/tesseract_task_composer/configtask_composer_plugins_no_trajopt_ifopt.yaml
 ```
 
 **Windows:**
