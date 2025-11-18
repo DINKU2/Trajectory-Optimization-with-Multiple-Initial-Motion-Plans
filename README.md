@@ -43,7 +43,7 @@ Run on Windows locally using the setup script:
 .\traj_opt_env\Scripts\Activate.ps1
 
 # Run Part 1
-python project/part_1.py
+python project/TrajOptApproach3.py
 ```
 
 ### Part 2 (Ubuntu 22.04 / WSL)
